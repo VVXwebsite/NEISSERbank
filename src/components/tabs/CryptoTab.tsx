@@ -36,9 +36,11 @@ export function CryptoTab({ currentUser, onRefreshUser }: CryptoTabProps) {
   const cryptos = getCryptos();
   const marketDay = getMarketDay();
 
-  const [selectedCrypto, setSelectedCrypto] = useState<CryptoCurrency>(
-    cryptos.find((c) => c.isSpecialMoon) || cryptos[0]
+  const [selectedCryptoId, setSelectedCryptoId] = useState<string>(
+    cryptos.find((c) => c.isSpecialMoon)?.id || cryptos[0]?.id || 'crypto-moon'
   );
+  const selectedCrypto = cryptos.find((c) => c.id === selectedCryptoId) || cryptos[0];
+
   const [tradeAction, setTradeAction] = useState<'buy' | 'sell'>('buy');
   const [tradeAmount, setTradeAmount] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -90,11 +92,6 @@ export function CryptoTab({ currentUser, onRefreshUser }: CryptoTabProps) {
 
   const handleSimulateMarket = () => {
     simulateNextMarketDay();
-    // Update local selected crypto
-    const updatedList = getCryptos();
-    const updatedSelected = updatedList.find((c) => c.id === selectedCrypto.id);
-    if (updatedSelected) setSelectedCrypto(updatedSelected);
-
     setSuccessMsg(`Zaktualizowano rynek! Rozpoczęto dzień giełdowy #${getMarketDay()}. Wszyscy użytkownicy mają nowe, zsynchronizowane ceny.`);
     onRefreshUser();
     setTimeout(() => setSuccessMsg(''), 4000);
@@ -470,7 +467,7 @@ export function CryptoTab({ currentUser, onRefreshUser }: CryptoTabProps) {
                 return (
                   <tr
                     key={coin.id}
-                    onClick={() => setSelectedCrypto(coin)}
+                    onClick={() => setSelectedCryptoId(coin.id)}
                     className={`cursor-pointer transition-colors hover:bg-neutral-900/60 ${
                       isSelected ? 'bg-neutral-900/80 font-bold' : ''
                     }`}
@@ -507,7 +504,7 @@ export function CryptoTab({ currentUser, onRefreshUser }: CryptoTabProps) {
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSelectedCrypto(coin);
+                          setSelectedCryptoId(coin.id);
                         }}
                         className="rounded-lg border border-neutral-800 bg-black px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-white hover:text-black transition-colors"
                       >

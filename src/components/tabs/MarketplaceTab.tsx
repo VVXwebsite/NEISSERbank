@@ -319,8 +319,22 @@ export function MarketplaceTab({ currentUser, onRefreshUser }: MarketplaceTabPro
       {/* Grid of Listings */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredItems.length === 0 ? (
-          <div className="col-span-full py-12 text-center text-xs text-neutral-500 rounded-2xl border border-neutral-900 bg-neutral-950">
-            Brak ofert spełniających podane kryteria.
+          <div className="col-span-full py-16 px-4 text-center rounded-2xl border border-neutral-900 bg-neutral-950/80 space-y-3">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-900 text-neutral-400">
+              <ShoppingBag className="h-6 w-6 text-purple-400" />
+            </div>
+            <h3 className="text-sm font-bold text-white">Rynek Marketplace jest gotowy</h3>
+            <p className="text-xs text-neutral-400 max-w-sm mx-auto">
+              Brak aktywnych ofert w tej chwili. Bądź pierwszym przedsiębiorcą i wystaw swój produkt, usługę lub plik cyfrowy za walutę NSD!
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowNewItemModal(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-xs font-bold text-black hover:bg-neutral-200 transition-all shadow-sm mt-2"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>Wystaw pierwszą ofertę</span>
+            </button>
           </div>
         ) : (
           filteredItems.map((item) => {

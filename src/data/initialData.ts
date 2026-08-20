@@ -336,26 +336,7 @@ export const CAT_CARDS_DATABASE: CatCard[] = [
   { id: 'cat-50', number: 50, name: 'Imperator Neisser Rex', title: 'Absolutny Władca Świata Kotów', rarity: 'Mityczny', purrPower: 100, agility: 99, wealth: 100, cunning: 100, description: 'Ostateczna karta nr 50. Legendarny symbol bogactwa i chwały Neissera.', visualEmoji: '👑🟣🐱', cardColor: 'border-fuchsia-500' },
 ];
 
-export const INITIAL_USERS: User[] = [
-  {
-    id: '4820 1192 8834 0001',
-    name: 'Developer',
-    surname: 'Neiiser',
-    city: '2026',
-    email: 'kubaswd@int.pl',
-    pin: '000000',
-    role: 'developer',
-    balanceNSD: 75.00,
-    level: 1,
-    avatarUrl: '',
-    bio: 'Główny Założyciel i Architekt platformy Neisser 2026.',
-    createdAt: '2026-08-01',
-    expressTransfersRemainingToday: 2,
-    friends: [],
-    ownedCatCards: ['cat-4'],
-    cryptoPortfolio: {},
-  },
-];
+export const INITIAL_USERS: User[] = [];
 
 export const INITIAL_MARKETPLACE_ITEMS: MarketplaceItem[] = [];
 

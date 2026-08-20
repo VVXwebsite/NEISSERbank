@@ -14,8 +14,9 @@ interface AuthModalProps {
 type AuthStep = 'login_pin' | 'login_password' | 'register_form' | 'verifying_20s' | 'pin_setup' | 'completed';
 
 export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
-  const [step, setStep] = useState<AuthStep>('login_pin');
-  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const users = getUsers();
+  const [step, setStep] = useState<AuthStep>(users.length === 0 ? 'register_form' : 'login_pin');
+  const [selectedUser, setSelectedUser] = useState<User | null>(users[0] || null);
 
   // Easter egg: 20 clicks on logo
   const [logoClicks, setLogoClicks] = useState(0);
@@ -39,13 +40,15 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   const [currentDiagMessage, setCurrentDiagMessage] = useState('Nawiązywanie bezpiecznego połączenia z węzłem Neisser...');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const users = getUsers();
-
   useEffect(() => {
-    if (users.length > 0 && !selectedUser) {
-      setSelectedUser(users[0]);
+    const currentUsers = getUsers();
+    if (currentUsers.length === 0) {
+      setStep('register_form');
+      setSelectedUser(null);
+    } else if (!selectedUser || !currentUsers.find((u) => u.id === selectedUser.id)) {
+      setSelectedUser(currentUsers[0]);
     }
-  }, [users, selectedUser]);
+  }, [isOpen]);
 
   const handleLogoClick = () => {
     const nextCount = logoClicks + 1;
@@ -143,7 +146,7 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
         : `Nowy mieszkaniec miasta ${city.trim()} w Neisserze.`,
       createdAt: new Date().toISOString().slice(0, 10),
       expressTransfersRemainingToday: 2,
-      friends: ['4820 1192 8834 0001'], // Connected with Developer by default
+      friends: [], // Clean friends list
       ownedCatCards: ['cat-4'], // Starting starter cat card
       cryptoPortfolio: {},
     };
@@ -241,109 +244,136 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
         {/* STEP 1: Quick PIN Login */}
         {step === 'login_pin' && (
           <div className="space-y-4">
-            <div className="rounded-xl border border-neutral-800 bg-neutral-900/70 p-3">
-              <label className="block text-[11px] font-medium text-neutral-400 mb-1.5">
-                Wybierz konto użytkownika:
-              </label>
-              <select
-                id="auth-user-selector"
-                value={selectedUser?.id || ''}
-                onChange={(e) => {
-                  const u = users.find((x) => x.id === e.target.value);
-                  if (u) {
-                    setSelectedUser(u);
-                    setPin('');
-                    setErrorMsg('');
-                  }
-                }}
-                className="w-full rounded-lg border border-neutral-700 bg-black px-3 py-2 text-sm text-white focus:border-white focus:outline-none"
-              >
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name} {u.surname} ({u.role === 'developer' ? '👑 Deweloper' : u.city}) • {u.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {selectedUser && (
-              <div className="text-center py-2">
-                <p className="text-xs text-neutral-400 mb-2">
-                  Wpisz 6-cyfrowy kod PIN dla <span className="text-white font-medium">{selectedUser.name} {selectedUser.surname}</span>
-                </p>
-                {/* 6 Dots PIN preview */}
-                <div className="flex justify-center gap-3 my-3">
-                  {[0, 1, 2, 3, 4, 5].map((idx) => (
-                    <div
-                      key={idx}
-                      className={`h-4 w-4 rounded-full border transition-all ${
-                        pin.length > idx
-                          ? 'border-white bg-white scale-110'
-                          : 'border-neutral-700 bg-neutral-900'
-                      }`}
-                    />
-                  ))}
+            {users.length === 0 ? (
+              <div className="space-y-4 py-4 text-center">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-900 text-purple-400">
+                  <UserPlus className="h-7 w-7" />
                 </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Baza kont jest czysta</h3>
+                  <p className="text-xs text-neutral-400 mt-1 max-w-xs mx-auto">
+                    Nie ma jeszcze żadnych kont. Zarejestruj pierwsze konto obywatela Neissera i odbierz 75,00 NSD na start.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep('register_form');
+                    setErrorMsg('');
+                  }}
+                  className="w-full rounded-xl bg-white py-3 text-sm font-bold text-black hover:bg-neutral-200 transition-all flex items-center justify-center gap-2"
+                >
+                  <UserPlus className="h-4 w-4" />
+                  <span>Zarejestruj konto obywatela</span>
+                </button>
               </div>
-            )}
-
-            {/* Custom PIN Keypad */}
-            <div className="grid grid-cols-3 gap-2 pt-2 max-w-[280px] mx-auto">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((item, idx) => {
-                if (item === '') return <div key={idx} />;
-                if (item === '⌫') {
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={handleBackspace}
-                      className="flex h-12 items-center justify-center rounded-xl border border-neutral-800 bg-neutral-900 text-sm font-semibold text-neutral-400 active:bg-neutral-800"
-                    >
-                      Usuń
-                    </button>
-                  );
-                }
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => handleNumberClick(item)}
-                    className="flex h-12 items-center justify-center rounded-xl border border-neutral-800 bg-neutral-900 text-lg font-bold text-white transition-colors active:bg-white active:text-black"
+            ) : (
+              <>
+                <div className="rounded-xl border border-neutral-800 bg-neutral-900/70 p-3">
+                  <label className="block text-[11px] font-medium text-neutral-400 mb-1.5">
+                    Wybierz konto do logowania:
+                  </label>
+                  <select
+                    id="auth-user-selector"
+                    value={selectedUser?.id || ''}
+                    onChange={(e) => {
+                      const u = users.find((x) => x.id === e.target.value);
+                      if (u) {
+                        setSelectedUser(u);
+                        setPin('');
+                        setErrorMsg('');
+                      }
+                    }}
+                    className="w-full rounded-lg border border-neutral-700 bg-black px-3 py-2 text-sm text-white focus:border-white focus:outline-none font-mono"
                   >
-                    {item}
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name} {u.surname} ({u.role === 'developer' ? '👑 Deweloper' : u.city}) • {u.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedUser && (
+                  <div className="text-center py-2">
+                    <p className="text-xs text-neutral-400 mb-2">
+                      Wpisz 6-cyfrowy kod PIN dla <span className="text-white font-medium">{selectedUser.name} {selectedUser.surname}</span>
+                    </p>
+                    {/* 6 Dots PIN preview */}
+                    <div className="flex justify-center gap-3 my-3">
+                      {[0, 1, 2, 3, 4, 5].map((idx) => (
+                        <div
+                          key={idx}
+                          className={`h-4 w-4 rounded-full border transition-all ${
+                            pin.length > idx
+                              ? 'border-white bg-white scale-110'
+                              : 'border-neutral-700 bg-neutral-900'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Custom PIN Keypad */}
+                <div className="grid grid-cols-3 gap-2 pt-2 max-w-[280px] mx-auto">
+                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((item, idx) => {
+                    if (item === '') return <div key={idx} />;
+                    if (item === '⌫') {
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={handleBackspace}
+                          className="flex h-12 items-center justify-center rounded-xl border border-neutral-800 bg-neutral-900 text-sm font-semibold text-neutral-400 active:bg-neutral-800"
+                        >
+                          Usuń
+                        </button>
+                      );
+                    }
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => handleNumberClick(item)}
+                        className="flex h-12 items-center justify-center rounded-xl border border-neutral-800 bg-neutral-900 text-lg font-bold text-white transition-colors active:bg-white active:text-black"
+                      >
+                        {item}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Bottom Actions */}
+                <div className="pt-4 border-t border-neutral-800 flex justify-between items-center text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep('register_form');
+                      setErrorMsg('');
+                    }}
+                    className="inline-flex items-center gap-1.5 text-neutral-300 hover:text-white underline underline-offset-4"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Zarejestruj nowe konto
                   </button>
-                );
-              })}
-            </div>
 
-            {/* Bottom Actions */}
-            <div className="pt-4 border-t border-neutral-800 flex justify-between items-center text-xs">
-              <button
-                type="button"
-                onClick={() => {
-                  setStep('register_form');
-                  setErrorMsg('');
-                }}
-                className="inline-flex items-center gap-1.5 text-neutral-300 hover:text-white underline underline-offset-4"
-              >
-                <UserPlus className="h-3.5 w-3.5" />
-                Zarejestruj nowe konto
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (selectedUser) {
-                    setCurrentUser(selectedUser.id);
-                    onSuccess(selectedUser);
-                    onClose();
-                  }
-                }}
-                className="text-neutral-400 hover:text-white"
-              >
-                Szybkie wejście →
-              </button>
-            </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedUser) {
+                        setCurrentUser(selectedUser.id);
+                        onSuccess(selectedUser);
+                        onClose();
+                      }
+                    }}
+                    className="text-neutral-400 hover:text-white"
+                  >
+                    Szybkie wejście →
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 

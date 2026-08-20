@@ -11,6 +11,25 @@ import {
   User,
 } from '../types';
 import { CAT_CARDS_DATABASE, INITIAL_CRYPTOS, INITIAL_MARKETPLACE_ITEMS, INITIAL_USERS } from './initialData';
+import {
+  dbDeleteMarketplaceItem,
+  dbDeleteUser,
+  dbFetchFriendRequests,
+  dbFetchInvoices,
+  dbFetchLotteries,
+  dbFetchMarketplaceChats,
+  dbFetchMarketplaceItems,
+  dbFetchTransactions,
+  dbFetchUsers,
+  dbInsertTransaction,
+  dbUpsertFriendRequest,
+  dbUpsertInvoice,
+  dbUpsertLottery,
+  dbUpsertMarketplaceChat,
+  dbUpsertMarketplaceItem,
+  dbUpsertUser,
+  setupSupabaseRealtimeSync,
+} from '../lib/supabaseService';
 
 const USERS_KEY = 'neisser_users_v1';
 const CURRENT_USER_ID_KEY = 'neisser_current_user_id_v1';
@@ -22,7 +41,30 @@ const INVOICES_KEY = 'neisser_invoices_v1';
 const FRIEND_REQUESTS_KEY = 'neisser_friend_requests_v1';
 const LOTTERIES_KEY = 'neisser_lotteries_v1';
 const MARKET_DAY_KEY = 'neisser_market_day_v1';
-const MARKET_RESET_KEY = 'neisser_market_reset_day1_applied_v2';
+const FRESH_CLEAN_RELEASE_KEY = 'neisser_fresh_release_v3_clean_slate';
+
+// Ensure 100% fresh clean state for initial launch / publication
+(function checkCleanFreshSlate() {
+  try {
+    const isCleaned = localStorage.getItem(FRESH_CLEAN_RELEASE_KEY);
+    if (!isCleaned) {
+      localStorage.setItem(FRESH_CLEAN_RELEASE_KEY, 'true');
+      localStorage.removeItem(CURRENT_USER_ID_KEY);
+      localStorage.setItem(USERS_KEY, JSON.stringify([]));
+      localStorage.setItem(MARKETPLACE_KEY, JSON.stringify([]));
+      localStorage.setItem(MARKETPLACE_CHATS_KEY, JSON.stringify([]));
+      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify([]));
+      localStorage.setItem(INVOICES_KEY, JSON.stringify([]));
+      localStorage.setItem(FRIEND_REQUESTS_KEY, JSON.stringify([]));
+      localStorage.setItem(LOTTERIES_KEY, JSON.stringify([]));
+      localStorage.setItem(CRYPTOS_KEY, JSON.stringify(INITIAL_CRYPTOS));
+      localStorage.setItem(MARKET_DAY_KEY, '1');
+      localStorage.setItem('neisser_last_market_update_ts_v1', String(Date.now()));
+    }
+  } catch (e) {
+    console.error('Fresh slate init error:', e);
+  }
+})();
 
 type Listener = () => void;
 const listeners: Set<Listener> = new Set();
@@ -68,11 +110,67 @@ function setStored<T>(key: string, val: T) {
   }
 }
 
+// ----------------------------------------------------
+// SUPABASE AUTO INITIAL HYDRATION & REALTIME SYNC
+// ----------------------------------------------------
+let isInitialSyncDone = false;
+
+export async function syncAllWithSupabase(): Promise<void> {
+  try {
+    const [remoteUsers, remoteItems, remoteChats, remoteTxs, remoteInvoices, remoteFreqs, remoteLots] =
+      await Promise.all([
+        dbFetchUsers(),
+        dbFetchMarketplaceItems(),
+        dbFetchMarketplaceChats(),
+        dbFetchTransactions(),
+        dbFetchInvoices(),
+        dbFetchFriendRequests(),
+        dbFetchLotteries(),
+      ]);
+
+    if (remoteUsers !== null) {
+      localStorage.setItem(USERS_KEY, JSON.stringify(remoteUsers));
+    }
+    if (remoteItems !== null) {
+      localStorage.setItem(MARKETPLACE_KEY, JSON.stringify(remoteItems));
+    }
+    if (remoteChats !== null) {
+      localStorage.setItem(MARKETPLACE_CHATS_KEY, JSON.stringify(remoteChats));
+    }
+    if (remoteTxs !== null) {
+      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(remoteTxs));
+    }
+    if (remoteInvoices !== null) {
+      localStorage.setItem(INVOICES_KEY, JSON.stringify(remoteInvoices));
+    }
+    if (remoteFreqs !== null) {
+      localStorage.setItem(FRIEND_REQUESTS_KEY, JSON.stringify(remoteFreqs));
+    }
+    if (remoteLots !== null) {
+      localStorage.setItem(LOTTERIES_KEY, JSON.stringify(remoteLots));
+    }
+
+    notifyStoreUpdate();
+  } catch (e) {
+    console.warn('Initial Supabase sync skipped/fallback:', e);
+  }
+}
+
+if (typeof window !== 'undefined' && !isInitialSyncDone) {
+  isInitialSyncDone = true;
+  // Background initial fetch
+  syncAllWithSupabase();
+  // Listen for realtime changes across devices
+  setupSupabaseRealtimeSync(() => {
+    syncAllWithSupabase();
+  });
+}
+
+
 // Users
 export function getUsers(): User[] {
   let users = getStored<User[] | null>(USERS_KEY, null);
   if (users === null) {
-    // Return initial users without triggering store update event during render
     try {
       localStorage.setItem(USERS_KEY, JSON.stringify(INITIAL_USERS));
     } catch {}
@@ -110,13 +208,17 @@ export function saveUsers(users: User[]) {
 }
 
 export function getCurrentUser(): User | null {
-  const users = getUsers();
   const currentId = localStorage.getItem(CURRENT_USER_ID_KEY);
   if (!currentId) {
-    return users[0] || null;
+    return null;
   }
+  const users = getUsers();
   const found = users.find((u) => u.id === currentId);
-  return found || users[0] || null;
+  if (!found) {
+    localStorage.removeItem(CURRENT_USER_ID_KEY);
+    return null;
+  }
+  return found;
 }
 
 export function setCurrentUser(userId: string | null) {
@@ -134,6 +236,7 @@ export function updateUser(updated: Partial<User> & { id: string }) {
   if (idx !== -1) {
     users[idx] = { ...users[idx], ...updated };
     saveUsers(users);
+    dbUpsertUser(users[idx]);
   }
 }
 
@@ -147,6 +250,7 @@ export function deleteUser(userId: string) {
     }
   });
   saveUsers(filtered);
+  dbDeleteUser(userId);
 }
 
 // Transactions
@@ -167,162 +271,137 @@ export function addTransaction(tx: Omit<Transaction, 'id' | 'date'> & { date?: s
   };
   txs.unshift(newTx);
   setStored(TRANSACTIONS_KEY, txs);
+  dbInsertTransaction(newTx);
   return newTx;
 }
 
-// Cryptos
-export function getCryptos(): CryptoCurrency[] {
-  // Check if Day 1 reset was requested
-  const resetApplied = localStorage.getItem(MARKET_RESET_KEY);
-  if (!resetApplied) {
-    try {
-      localStorage.setItem(MARKET_RESET_KEY, 'true');
-      localStorage.setItem(CRYPTOS_KEY, JSON.stringify(INITIAL_CRYPTOS));
-      localStorage.setItem(MARKET_DAY_KEY, '1');
-      localStorage.setItem(LAST_MARKET_UPDATE_KEY, String(Date.now()));
-    } catch {}
-    return INITIAL_CRYPTOS;
+
+// ==========================================
+// GLOBALLY SYNCHRONIZED CRYPTO MARKET ENGINE
+// ==========================================
+// Synchronized to a global 5-hour UTC epoch grid.
+// Every user across all browsers/devices sees the exact same prices, charts, and countdown.
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000; // 5 hours in ms
+const GENESIS_ANCHOR_TIME = 1755648000000; // Fixed UTC epoch anchor
+
+function mulberry32(a: number) {
+  return function () {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function stringToSeed(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+export function getGlobalMarketCycle(): number {
+  const now = Date.now();
+  if (now <= GENESIS_ANCHOR_TIME) return 0;
+  return Math.floor((now - GENESIS_ANCHOR_TIME) / FIVE_HOURS_MS);
+}
+
+export function getMarketDay(): number {
+  return getGlobalMarketCycle() + 1;
+}
+
+export function getLastMarketUpdate(): number {
+  const cycle = getGlobalMarketCycle();
+  return GENESIS_ANCHOR_TIME + cycle * FIVE_HOURS_MS;
+}
+
+export function getNextMarketUpdateTime(): number {
+  const cycle = getGlobalMarketCycle();
+  return GENESIS_ANCHOR_TIME + (cycle + 1) * FIVE_HOURS_MS;
+}
+
+export function checkAndAutoUpdateMarket(): boolean {
+  // Driven automatically by global UTC epoch clock
+  return true;
+}
+
+function computeCryptoPriceAtCycle(coin: CryptoCurrency, targetCycle: number): { price: number; stage?: number } {
+  if (coin.isSpecialMoon) {
+    const moonStages = [5.20, 24.80, 112.50, 680.00, 3450.00, 16800.00, 42500.00, 67800.00, 12400.00, 4200.00, 450.00, 50.00];
+    const stageIdx = targetCycle % moonStages.length;
+    return {
+      price: moonStages[stageIdx],
+      stage: stageIdx + 1,
+    };
   }
 
-  const list = getStored<CryptoCurrency[] | null>(CRYPTOS_KEY, null);
-  if (list === null) {
-    try {
-      localStorage.setItem(CRYPTOS_KEY, JSON.stringify(INITIAL_CRYPTOS));
-    } catch {}
-    return INITIAL_CRYPTOS;
+  // Deterministic simulation from initial price up to targetCycle
+  let current = coin.initialPrice;
+  const baseSeed = stringToSeed(coin.id || coin.symbol);
+
+  // We simulate last max 50 cycles for speed and consistency
+  const startCycle = Math.max(0, targetCycle - 50);
+  for (let c = startCycle; c <= targetCycle; c++) {
+    if (c === 0) {
+      current = coin.initialPrice;
+      continue;
+    }
+    const rng = mulberry32(baseSeed + c * 1009);
+    const r = rng(); // 0 to 1
+    // Fluctuation between -6.5% and +8.5%
+    const pct = (r * 15.0 - 6.5) / 100;
+    current = Math.max(0.50, Math.round(current * (1 + pct) * 100) / 100);
   }
-  return list;
+
+  return { price: current };
+}
+
+// Cryptos (Synchronized globally)
+export function getCryptos(): CryptoCurrency[] {
+  const currentCycle = getGlobalMarketCycle();
+
+  return INITIAL_CRYPTOS.map((coin) => {
+    // Generate history for past 14 cycles
+    const history: number[] = [];
+    for (let c = Math.max(0, currentCycle - 13); c <= currentCycle; c++) {
+      const res = computeCryptoPriceAtCycle(coin, c);
+      history.push(res.price);
+    }
+
+    // Pad if history has fewer than 14 entries
+    while (history.length < 14) {
+      history.unshift(coin.initialPrice);
+    }
+
+    const currentPrice = history[history.length - 1];
+    const prevPrice = history.length > 1 ? history[history.length - 2] : coin.initialPrice;
+    const change24h = prevPrice > 0 ? Math.round(((currentPrice - prevPrice) / prevPrice) * 1000) / 10 : 0.0;
+
+    const res = computeCryptoPriceAtCycle(coin, currentCycle);
+
+    return {
+      ...coin,
+      currentPrice,
+      change24h,
+      history,
+      stage: res.stage,
+    };
+  });
 }
 
 export function saveCryptos(cryptos: CryptoCurrency[]) {
   setStored(CRYPTOS_KEY, cryptos);
 }
 
-export function getMarketDay(): number {
-  return getStored<number>(MARKET_DAY_KEY, 1);
-}
-
 export function resetMarketToDay1() {
-  saveCryptos(INITIAL_CRYPTOS);
-  setStored(MARKET_DAY_KEY, 1);
-  localStorage.setItem(LAST_MARKET_UPDATE_KEY, String(Date.now()));
   notifyStoreUpdate();
 }
 
-const LAST_MARKET_UPDATE_KEY = 'neisser_last_market_update_ts_v1';
-const FIVE_HOURS_MS = 5 * 60 * 60 * 1000; // 5 hours in milliseconds
-
-export function getLastMarketUpdate(): number {
-  const raw = localStorage.getItem(LAST_MARKET_UPDATE_KEY);
-  if (!raw) {
-    const now = Date.now();
-    localStorage.setItem(LAST_MARKET_UPDATE_KEY, String(now));
-    return now;
-  }
-  const parsed = parseInt(raw, 10);
-  return isNaN(parsed) ? Date.now() : parsed;
-}
-
-export function getNextMarketUpdateTime(): number {
-  const last = getLastMarketUpdate();
-  return last + FIVE_HOURS_MS;
-}
-
-// Check and automatically advance market every 5 hours
-export function checkAndAutoUpdateMarket(): boolean {
-  try {
-    const raw = localStorage.getItem(LAST_MARKET_UPDATE_KEY);
-    const now = Date.now();
-    if (!raw) {
-      localStorage.setItem(LAST_MARKET_UPDATE_KEY, String(now));
-      return false;
-    }
-    const lastTime = parseInt(raw, 10);
-    if (isNaN(lastTime)) {
-      localStorage.setItem(LAST_MARKET_UPDATE_KEY, String(now));
-      return false;
-    }
-
-    const elapsed = now - lastTime;
-    if (elapsed >= FIVE_HOURS_MS) {
-      // Calculate how many 5-hour periods passed (cap at 10)
-      const periods = Math.min(10, Math.max(1, Math.floor(elapsed / FIVE_HOURS_MS)));
-      for (let i = 0; i < periods; i++) {
-        simulateNextMarketDay();
-      }
-      localStorage.setItem(LAST_MARKET_UPDATE_KEY, String(now));
-      return true;
-    }
-  } catch (e) {
-    console.error('Market auto-update check error:', e);
-  }
-  return false;
-}
-
-// Advance Market Day: updates all cryptos synchronized for all users
 export function simulateNextMarketDay() {
-  const cryptos = getCryptos();
-  const currentDay = getMarketDay() + 1;
-  setStored(MARKET_DAY_KEY, currentDay);
-
-  const updated = cryptos.map((c) => {
-    if (c.isSpecialMoon) {
-      const stage = (c.stage || 1) + 1;
-      let newPrice = c.currentPrice;
-      let change = 0;
-
-      // Special skyrocket stages up to Bitcoin heights, then sharp drop
-      if (stage === 2) {
-        newPrice = 24.80;
-      } else if (stage === 3) {
-        newPrice = 112.50;
-      } else if (stage === 4) {
-        newPrice = 680.00;
-      } else if (stage === 5) {
-        newPrice = 3450.00;
-      } else if (stage === 6) {
-        newPrice = 16800.00;
-      } else if (stage === 7) {
-        newPrice = 42500.00;
-      } else if (stage === 8) {
-        newPrice = 67800.00; // Bitcoin-like peak!
-      } else if (stage === 9) {
-        newPrice = 12400.00; // Massive drop!
-      } else if (stage === 10) {
-        newPrice = 4200.00;
-      } else {
-        // Post-cycle fluctuations
-        const delta = (Math.random() * 20 - 10) / 100;
-        newPrice = Math.max(5, Math.round(c.currentPrice * (1 + delta) * 100) / 100);
-      }
-
-      change = Math.round(((newPrice - c.currentPrice) / c.currentPrice) * 1000) / 10;
-      const history = [...c.history.slice(-13), newPrice];
-
-      return {
-        ...c,
-        stage: stage > 12 ? 1 : stage,
-        currentPrice: Math.round(newPrice * 100) / 100,
-        change24h: change,
-        history,
-      };
-    }
-
-    // Normal crypto fluctuation (-7% to +9%)
-    const pct = (Math.random() * 16 - 7) / 100;
-    const newPrice = Math.max(1.5, Math.round(c.currentPrice * (1 + pct) * 100) / 100);
-    const change = Math.round(((newPrice - c.currentPrice) / c.currentPrice) * 1000) / 10;
-    const history = [...c.history.slice(-13), newPrice];
-
-    return {
-      ...c,
-      currentPrice: newPrice,
-      change24h: change,
-      history,
-    };
-  });
-
-  saveCryptos(updated);
+  // Manual trigger if needed
+  notifyStoreUpdate();
 }
 
 // Marketplace
@@ -348,6 +427,7 @@ export function addMarketplaceItem(item: Omit<MarketplaceItem, 'id' | 'createdAt
   };
   items.unshift(newItem);
   saveMarketplaceItems(items);
+  dbUpsertMarketplaceItem(newItem);
   return newItem;
 }
 
@@ -355,6 +435,7 @@ export function deleteMarketplaceItem(itemId: string) {
   const items = getMarketplaceItems();
   const filtered = items.filter((i) => i.id !== itemId);
   saveMarketplaceItems(filtered);
+  dbDeleteMarketplaceItem(itemId);
 }
 
 // Marketplace Chats (Conversation with Seller before purchase)
@@ -404,6 +485,7 @@ export function getOrCreateMarketplaceChat(item: MarketplaceItem, buyer: User): 
 
   chats.unshift(newChat);
   saveMarketplaceChats(chats);
+  dbUpsertMarketplaceChat(newChat);
   return newChat;
 }
 
@@ -432,6 +514,7 @@ export function sendMarketplaceMessage(
   chats[chatIdx].updatedAt = nowStr;
 
   saveMarketplaceChats(chats);
+  dbUpsertMarketplaceChat(chats[chatIdx]);
   return chats[chatIdx];
 }
 
@@ -471,6 +554,7 @@ export function addInvoice(invoice: Omit<Invoice, 'id' | 'invoiceNumber' | 'issu
   };
   invoices.unshift(newInv);
   saveInvoices(invoices);
+  dbUpsertInvoice(newInv);
   return newInv;
 }
 
@@ -480,6 +564,7 @@ export function updateInvoiceStatus(invoiceId: string, status: 'paid' | 'unpaid'
   if (idx !== -1) {
     invoices[idx].status = status;
     saveInvoices(invoices);
+    dbUpsertInvoice(invoices[idx]);
   }
 }
 
@@ -509,6 +594,7 @@ export function sendFriendRequest(fromUser: User, toUserId: string) {
   };
   reqs.unshift(newReq);
   saveFriendRequests(reqs);
+  dbUpsertFriendRequest(newReq);
 }
 
 export function respondFriendRequest(requestId: string, accept: boolean) {
@@ -518,6 +604,7 @@ export function respondFriendRequest(requestId: string, accept: boolean) {
 
   req.status = accept ? 'accepted' : 'rejected';
   saveFriendRequests(reqs);
+  dbUpsertFriendRequest(req);
 
   if (accept) {
     const users = getUsers();
@@ -527,6 +614,8 @@ export function respondFriendRequest(requestId: string, accept: boolean) {
       if (!u1.friends.includes(u2.id)) u1.friends.push(u2.id);
       if (!u2.friends.includes(u1.id)) u2.friends.push(u1.id);
       saveUsers(users);
+      dbUpsertUser(u1);
+      dbUpsertUser(u2);
     }
   }
 }
@@ -542,7 +631,9 @@ export function getLotteries(): Lottery[] {
 
 export function saveLotteries(lots: Lottery[]) {
   setStored(LOTTERIES_KEY, lots);
+  lots.forEach((lot) => dbUpsertLottery(lot));
 }
+
 
 export function buyLotteryTickets(lotteryId: string, user: User, count: number) {
   const lotteries = getLotteries();

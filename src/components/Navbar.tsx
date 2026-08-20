@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BalloonLogo } from './BalloonLogo';
 import { User } from '../types';
 import { LEVEL_CONFIGS } from '../data/initialData';
-import { Crown, Sparkles, UserCircle, LogOut, RefreshCw } from 'lucide-react';
-import { getMarketDay, simulateNextMarketDay } from '../data/storage';
+import { Crown, Sparkles, UserCircle, LogOut, RefreshCw, Database } from 'lucide-react';
+import { getMarketDay, syncAllWithSupabase } from '../data/storage';
+import { getSyncStatus, subscribeToSyncStatus, SyncStatus } from '../lib/supabaseService';
 
 interface NavbarProps {
   currentUser: User | null;
@@ -14,6 +15,20 @@ interface NavbarProps {
 export function Navbar({ currentUser, onOpenAuth, onLogout }: NavbarProps) {
   const currentLevelConfig = LEVEL_CONFIGS.find((l) => l.level === (currentUser?.level || 1));
   const marketDay = getMarketDay();
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(getSyncStatus());
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  useEffect(() => {
+    return subscribeToSyncStatus((status) => {
+      setSyncStatus(status);
+    });
+  }, []);
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    await syncAllWithSupabase();
+    setTimeout(() => setIsSyncing(false), 600);
+  };
 
   return (
     <header
@@ -38,9 +53,21 @@ export function Navbar({ currentUser, onOpenAuth, onLogout }: NavbarProps) {
                 </span>
               )}
             </div>
-            <p className="text-[10px] text-neutral-400 font-mono">
-              Bank Społeczności • Dzień Rynku #{marketDay}
-            </p>
+            <div className="flex items-center gap-2 text-[10px] text-neutral-400 font-mono">
+              <span>Bank • Dzień Rynku #{marketDay}</span>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={handleManualSync}
+                className="inline-flex items-center gap-1 text-[10px] text-emerald-400/90 hover:text-emerald-300 transition-colors"
+                title="Baza Supabase podpięta (ID: jpyteiadbjirtbdinstj). Kliknij, aby odświeżyć."
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <Database className="h-2.5 w-2.5" />
+                <span className="hidden sm:inline">Supabase Live</span>
+                <RefreshCw className={`h-2 w-2 ${isSyncing ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -92,3 +119,4 @@ export function Navbar({ currentUser, onOpenAuth, onLogout }: NavbarProps) {
     </header>
   );
 }
+
