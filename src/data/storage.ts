@@ -9,16 +9,19 @@ import {
   MarketplaceMessage,
   Transaction,
   User,
+  SavingsVault,
 } from '../types';
 import { CAT_CARDS_DATABASE, INITIAL_CRYPTOS, INITIAL_MARKETPLACE_ITEMS, INITIAL_USERS } from './initialData';
 import {
   dbDeleteMarketplaceItem,
   dbDeleteUser,
+  dbDeleteSavingsVault,
   dbFetchFriendRequests,
   dbFetchInvoices,
   dbFetchLotteries,
   dbFetchMarketplaceChats,
   dbFetchMarketplaceItems,
+  dbFetchSavingsVaults,
   dbFetchTransactions,
   dbFetchUsers,
   dbInsertTransaction,
@@ -27,6 +30,7 @@ import {
   dbUpsertLottery,
   dbUpsertMarketplaceChat,
   dbUpsertMarketplaceItem,
+  dbUpsertSavingsVault,
   dbUpsertUser,
   setupSupabaseRealtimeSync,
 } from '../lib/supabaseService';
@@ -40,6 +44,7 @@ const MARKETPLACE_CHATS_KEY = 'neisser_marketplace_chats_v1';
 const INVOICES_KEY = 'neisser_invoices_v1';
 const FRIEND_REQUESTS_KEY = 'neisser_friend_requests_v1';
 const LOTTERIES_KEY = 'neisser_lotteries_v1';
+const SAVINGS_VAULTS_KEY = 'neisser_savings_vaults_v1';
 const MARKET_DAY_KEY = 'neisser_market_day_v1';
 const FRESH_CLEAN_RELEASE_KEY = 'neisser_fresh_release_v3_clean_slate';
 
@@ -57,6 +62,7 @@ const FRESH_CLEAN_RELEASE_KEY = 'neisser_fresh_release_v3_clean_slate';
       localStorage.setItem(INVOICES_KEY, JSON.stringify([]));
       localStorage.setItem(FRIEND_REQUESTS_KEY, JSON.stringify([]));
       localStorage.setItem(LOTTERIES_KEY, JSON.stringify([]));
+      localStorage.setItem(SAVINGS_VAULTS_KEY, JSON.stringify([]));
       localStorage.setItem(CRYPTOS_KEY, JSON.stringify(INITIAL_CRYPTOS));
       localStorage.setItem(MARKET_DAY_KEY, '1');
       localStorage.setItem('neisser_last_market_update_ts_v1', String(Date.now()));
@@ -117,16 +123,25 @@ let isInitialSyncDone = false;
 
 export async function syncAllWithSupabase(): Promise<void> {
   try {
-    const [remoteUsers, remoteItems, remoteChats, remoteTxs, remoteInvoices, remoteFreqs, remoteLots] =
-      await Promise.all([
-        dbFetchUsers(),
-        dbFetchMarketplaceItems(),
-        dbFetchMarketplaceChats(),
-        dbFetchTransactions(),
-        dbFetchInvoices(),
-        dbFetchFriendRequests(),
-        dbFetchLotteries(),
-      ]);
+    const [
+      remoteUsers,
+      remoteItems,
+      remoteChats,
+      remoteTxs,
+      remoteInvoices,
+      remoteFreqs,
+      remoteLots,
+      remoteVaults,
+    ] = await Promise.all([
+      dbFetchUsers(),
+      dbFetchMarketplaceItems(),
+      dbFetchMarketplaceChats(),
+      dbFetchTransactions(),
+      dbFetchInvoices(),
+      dbFetchFriendRequests(),
+      dbFetchLotteries(),
+      dbFetchSavingsVaults(),
+    ]);
 
     if (remoteUsers !== null) {
       localStorage.setItem(USERS_KEY, JSON.stringify(remoteUsers));
@@ -148,6 +163,9 @@ export async function syncAllWithSupabase(): Promise<void> {
     }
     if (remoteLots !== null) {
       localStorage.setItem(LOTTERIES_KEY, JSON.stringify(remoteLots));
+    }
+    if (remoteVaults !== null) {
+      localStorage.setItem(SAVINGS_VAULTS_KEY, JSON.stringify(remoteVaults));
     }
 
     notifyStoreUpdate();
@@ -279,10 +297,11 @@ export function addTransaction(tx: Omit<Transaction, 'id' | 'date'> & { date?: s
 // ==========================================
 // GLOBALLY SYNCHRONIZED CRYPTO MARKET ENGINE
 // ==========================================
-// Synchronized to a global 5-hour UTC epoch grid.
+// Synchronized to a global 5-hour UTC epoch grid starting on Day 1.
 // Every user across all browsers/devices sees the exact same prices, charts, and countdown.
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000; // 5 hours in ms
-const GENESIS_ANCHOR_TIME = 1755648000000; // Fixed UTC epoch anchor
+// Fixed UTC epoch anchor calibrated for Day 1 (August 2026 launch)
+const GENESIS_ANCHOR_TIME = 1787220000000;
 
 function mulberry32(a: number) {
   return function () {
@@ -758,4 +777,194 @@ export function buyCatCardPack(user: User): { success: boolean; card?: CatCard; 
   });
 
   return { success: true, card: randomCard, msg: `Wylosowano kota: ${randomCard.name} (${randomCard.rarity})!` };
+}
+
+// ==========================================
+// SAVINGS VAULTS (SKARBONKA Z BLOKADĄ CZASOWĄ)
+// ==========================================
+export function getSavingsVaults(userId?: string): SavingsVault[] {
+  const allVaults = getStored<SavingsVault[]>(SAVINGS_VAULTS_KEY, []);
+  if (userId) {
+    return allVaults.filter((v) => v.userId === userId);
+  }
+  return allVaults;
+}
+
+export function saveSavingsVaults(vaults: SavingsVault[]) {
+  setStored(SAVINGS_VAULTS_KEY, vaults);
+  vaults.forEach((v) => dbUpsertSavingsVault(v));
+}
+
+export function createSavingsVault(params: {
+  userId: string;
+  name: string;
+  amountNSD: number;
+  lockDays: number;
+  interestRatePercent: number;
+  iconEmoji: string;
+  notes?: string;
+}): { success: boolean; vault?: SavingsVault; error?: string } {
+  const users = getUsers();
+  const user = users.find((u) => u.id === params.userId);
+  if (!user) return { success: false, error: 'Nie znaleziono użytkownika.' };
+
+  if (params.amountNSD <= 0) {
+    return { success: false, error: 'Wprowadź poprawną kwotę wkładu do skarbonki.' };
+  }
+
+  if (user.balanceNSD < params.amountNSD) {
+    return { success: false, error: 'Niewystarczające saldo NSD w portfelu głównym.' };
+  }
+
+  const now = Date.now();
+  const lockDurationMs = params.lockDays * 24 * 60 * 60 * 1000;
+  const lockedUntil = now + lockDurationMs;
+
+  const newVault: SavingsVault = {
+    id: `vault-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    userId: params.userId,
+    name: params.name.trim() || `Skarbonka ${params.lockDays} dni`,
+    amountNSD: params.amountNSD,
+    lockedUntil,
+    lockDays: params.lockDays,
+    createdAt: now,
+    interestRatePercent: params.interestRatePercent,
+    status: 'locked',
+    iconEmoji: params.iconEmoji || '🐷',
+    notes: params.notes?.trim() || undefined,
+  };
+
+  // Deduct from user
+  user.balanceNSD -= params.amountNSD;
+  saveUsers(users);
+  dbUpsertUser(user);
+
+  // Save vault
+  const allVaults = getStored<SavingsVault[]>(SAVINGS_VAULTS_KEY, []);
+  allVaults.unshift(newVault);
+  setStored(SAVINGS_VAULTS_KEY, allVaults);
+  dbUpsertSavingsVault(newVault);
+
+  // Add transaction log
+  addTransaction({
+    senderId: user.id,
+    senderName: `${user.name} ${user.surname}`,
+    receiverId: newVault.id,
+    receiverName: `Skarbonka z blokadą: ${newVault.name} (${newVault.lockDays}d)`,
+    amount: params.amountNSD,
+    title: `Zdeponowano środki w Skarbonce Terminowej (${params.lockDays} dni)`,
+    category: 'transfer',
+    type: 'instant',
+    status: 'completed',
+  });
+
+  return { success: true, vault: newVault };
+}
+
+export function withdrawFromSavingsVault(vaultId: string, user: User): {
+  success: boolean;
+  totalWithdrawn?: number;
+  bonusEarned?: number;
+  error?: string;
+} {
+  const allVaults = getStored<SavingsVault[]>(SAVINGS_VAULTS_KEY, []);
+  const vaultIndex = allVaults.findIndex((v) => v.id === vaultId && v.userId === user.id);
+
+  if (vaultIndex === -1) {
+    return { success: false, error: 'Nie odnaleziono skarbonki.' };
+  }
+
+  const vault = allVaults[vaultIndex];
+
+  if (vault.status === 'withdrawn') {
+    return { success: false, error: 'Środki z tej skarbonki zostały już wcześniej wypłacone.' };
+  }
+
+  const now = Date.now();
+  if (now < vault.lockedUntil) {
+    const remainingHours = Math.ceil((vault.lockedUntil - now) / (1000 * 60 * 60));
+    return {
+      success: false,
+      error: `Skarbonka jest zablokowana! Pozostało jeszcze około ${remainingHours} godz. do odblokowania.`,
+    };
+  }
+
+  // Calculate profit bonus
+  const bonus = (vault.amountNSD * vault.interestRatePercent) / 100;
+  const totalPayout = vault.amountNSD + bonus;
+
+  // Update user
+  const users = getUsers();
+  const u = users.find((item) => item.id === user.id);
+  if (u) {
+    u.balanceNSD += totalPayout;
+    saveUsers(users);
+    dbUpsertUser(u);
+  }
+
+  // Mark vault as withdrawn
+  vault.status = 'withdrawn';
+  allVaults[vaultIndex] = vault;
+  setStored(SAVINGS_VAULTS_KEY, allVaults);
+  dbUpsertSavingsVault(vault);
+
+  // Add transaction
+  addTransaction({
+    senderId: vault.id,
+    senderName: `Skarbonka Terminowa (${vault.name})`,
+    receiverId: user.id,
+    receiverName: `${user.name} ${user.surname}`,
+    amount: totalPayout,
+    title: `Wypłata z odblokowanej Skarbonki (+${bonus.toFixed(2)} NSD premii za oszczędzanie!)`,
+    category: 'transfer',
+    type: 'instant',
+    status: 'completed',
+  });
+
+  return { success: true, totalWithdrawn: totalPayout, bonusEarned: bonus };
+}
+
+export function depositMoreToSavingsVault(
+  vaultId: string,
+  extraAmount: number,
+  user: User
+): { success: boolean; error?: string } {
+  if (extraAmount <= 0) return { success: false, error: 'Wprowadź poprawną kwotę.' };
+  if (user.balanceNSD < extraAmount) {
+    return { success: false, error: 'Niewystarczające saldo NSD na koncie.' };
+  }
+
+  const allVaults = getStored<SavingsVault[]>(SAVINGS_VAULTS_KEY, []);
+  const vault = allVaults.find((v) => v.id === vaultId && v.userId === user.id);
+  if (!vault || vault.status === 'withdrawn') {
+    return { success: false, error: 'Skarbonka nie istnieje lub została zamknięta.' };
+  }
+
+  // Deduct from user
+  const users = getUsers();
+  const u = users.find((item) => item.id === user.id);
+  if (u) {
+    u.balanceNSD -= extraAmount;
+    saveUsers(users);
+    dbUpsertUser(u);
+  }
+
+  // Update vault
+  vault.amountNSD += extraAmount;
+  setStored(SAVINGS_VAULTS_KEY, allVaults);
+  dbUpsertSavingsVault(vault);
+
+  addTransaction({
+    senderId: user.id,
+    senderName: `${user.name} ${user.surname}`,
+    receiverId: vault.id,
+    receiverName: `Skarbonka (${vault.name})`,
+    amount: extraAmount,
+    title: `Dopłata do zablokowanej Skarbonki: ${vault.name}`,
+    category: 'transfer',
+    type: 'instant',
+    status: 'completed',
+  });
+
+  return { success: true };
 }

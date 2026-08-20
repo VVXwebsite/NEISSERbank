@@ -164,3 +164,17 @@ export interface LevelConfig {
   badge: string;
   perks: string[];
 }
+
+export interface SavingsVault {
+  id: string;
+  userId: string;
+  name: string;
+  amountNSD: number;
+  lockedUntil: number; // timestamp ms
+  lockDays: number;
+  createdAt: number; // timestamp ms
+  interestRatePercent: number; // Bonus yield e.g. 8% for 7 days
+  status: 'locked' | 'unlocked' | 'withdrawn';
+  iconEmoji: string;
+  notes?: string;
+}

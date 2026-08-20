@@ -7,6 +7,7 @@ import {
   Invoice,
   FriendRequest,
   Lottery,
+  SavingsVault,
 } from '../types';
 
 export type SyncStatus = 'connected' | 'connecting' | 'fallback' | 'error';
@@ -286,6 +287,38 @@ function mapLotteryToDb(lottery: Lottery): any {
   };
 }
 
+function mapSavingsVaultFromDb(row: any): SavingsVault {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    amountNSD: Number(row.amount_nsd || 0),
+    lockedUntil: Number(row.locked_until || 0),
+    lockDays: Number(row.lock_days || 7),
+    createdAt: Number(row.created_at || Date.now()),
+    interestRatePercent: Number(row.interest_rate_percent || 0),
+    status: row.status || 'locked',
+    iconEmoji: row.icon_emoji || '🐷',
+    notes: row.notes || undefined,
+  };
+}
+
+function mapSavingsVaultToDb(v: SavingsVault): any {
+  return {
+    id: v.id,
+    user_id: v.userId,
+    name: v.name,
+    amount_nsd: v.amountNSD,
+    locked_until: v.lockedUntil,
+    lock_days: v.lockDays,
+    created_at: v.createdAt,
+    interest_rate_percent: v.interestRatePercent,
+    status: v.status,
+    icon_emoji: v.iconEmoji,
+    notes: v.notes || null,
+  };
+}
+
 // ----------------------------------------------------
 // SUPABASE CRUD OPERATIONS
 // ----------------------------------------------------
@@ -467,6 +500,34 @@ export async function dbUpsertLottery(lottery: Lottery): Promise<void> {
   }
 }
 
+// Savings Vaults (Skarbonka z blokadą)
+export async function dbFetchSavingsVaults(): Promise<SavingsVault[] | null> {
+  try {
+    const { data, error } = await supabase.from('savings_vaults').select('*');
+    if (error) return null;
+    setSyncStatus('connected');
+    return (data || []).map(mapSavingsVaultFromDb);
+  } catch {
+    return null;
+  }
+}
+
+export async function dbUpsertSavingsVault(vault: SavingsVault): Promise<void> {
+  try {
+    const dbPayload = mapSavingsVaultToDb(vault);
+    await supabase.from('savings_vaults').upsert(dbPayload, { onConflict: 'id' });
+    setSyncStatus('connected');
+  } catch (e) {
+    console.warn('Supabase upsert vault error:', e);
+  }
+}
+
+export async function dbDeleteSavingsVault(vaultId: string): Promise<void> {
+  try {
+    await supabase.from('savings_vaults').delete().eq('id', vaultId);
+  } catch {}
+}
+
 // ----------------------------------------------------
 // REALTIME MULTI-DEVICE SYNC ENGINE
 // ----------------------------------------------------
@@ -512,6 +573,11 @@ export function setupSupabaseRealtimeSync(onRemoteChange: () => void): () => voi
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'lotteries' },
+        () => onRemoteChange()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'savings_vaults' },
         () => onRemoteChange()
       )
       .subscribe((status) => {
