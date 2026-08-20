@@ -1,0 +1,6 @@
+{
+  "name": "Neisser Bank",
+  "description": "Aplikacja bankowa dla rodziny i społeczności z walutą NSD, transferami, giełdą kryptowalut, rynkiem marketplace i kolekcją kart.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
